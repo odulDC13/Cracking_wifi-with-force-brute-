@@ -152,7 +152,7 @@ root.title("Akira WiFi")
 root.geometry("500x500")  # Cambié el tamaño de la ventana para acomodar la imagen
 
 # Cargar y mostrar la imagen
-imagen = Image.open("C:/Users/Akira/Desktop/auditorias/aplicaciones/picture.png")
+imagen = Image.open("picture.png")
 imagen = imagen.resize((150, 150))  # Ajustar el tamaño de la imagen si es necesario
 imagen_tk = ImageTk.PhotoImage(imagen)
 
